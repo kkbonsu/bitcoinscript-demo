@@ -19,6 +19,42 @@
     var packers_hash = "8cb74f633826472ec0709268506e5b9af9729ef1"
     var saints_hash = "6fb18f274fec83bb2511460ab3dd90099c8a6b95"
 </script>
-
+<script>
+    function ballgameScript( alice_pub, bob_pub, packers_hash, saints_hash ) {
+        return bitcoinjs.script.fromASM(`
+            OP_IF OP_HASH160 ${ packers_hash } OP_EQUALVERIFY 
+            ${ alice_pub } OP_CHECKSIG
+            OP_ELSE OP_HASH160 ${ saints_hash } OP_EQUALVERIFY
+            ${ bob_pub } OP_CHECKSIG
+            OP_ENDIF`.trim().replace(/\s+/g, ' '),
+        );
+    }
+</script>
+<script>
+    function ballGame(alice_pub,bob_pub,packers_hash,saints_hash) {
+        var p2wsh = bitcoinjs.payments.p2wsh({redeem: {output: 
+        ballgameScript( alice_pub, bob_pub, packers_hash, saints_hash ), network: bitcoinjs.networks.regtest}, network: 
+        bitcoinjs.networks.regtest });
+        console.log('P2WSH smart contract address:', p2wsh.address);
+        return p2wsh.address;
+    }
+    ballGame( alice_pub, bob_pub, packers_hash, saints_hash );
+</script>
+<script>
+    function witnessStackToScriptWitness(witness) {
+    let buffer2 = buffer.Buffer.allocUnsafe(0);
+    function writeSlice(slice) {buffer2 = buffer.Buffer.concat([buffer2, buffer.Buffer.from(slice)]);}
+    function writeVarInt(i) {
+        const currentLen = buffer2.length;
+        const varintLen = varuintBitcoin.encodingLength(i);
+        buffer2 = buffer.Buffer.concat([buffer2, buffer.Buffer.allocUnsafe(varintLen)]);
+        varuintBitcoin.encode(i, buffer2, currentLen);
+    }
+    function writeVarSlice(slice) {writeVarInt(slice.length);writeSlice(slice);}
+    function writeVector(vector) {writeVarInt(vector.length);vector.forEach(writeVarSlice);}
+    writeVector(witness);
+    return buffer2;
+}
+</script>
 </body>
 </html>
