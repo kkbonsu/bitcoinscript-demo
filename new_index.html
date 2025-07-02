@@ -1,0 +1,186 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Self-Custodial Bitcoin Wallet</title>
+  <script src="https://cdn.jsdelivr.net/npm/react@18.2.0/umd/react.production.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/react-dom@18.2.0/umd/react-dom.production.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/bitcoinjs-lib@4.0.5/dist/bitcoinjs-lib.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/axios@1.4.0/dist/axios.min.js"></script>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+</head>
+<body>
+  <div id="root"></div>
+  <script type="text/babel">
+    const { useState } = React;
+    const bitcoin = window.bitcoinjs;
+    const axios = window.axios;
+
+    function BitcoinWallet() {
+      const [seedPhrase, setSeedPhrase] = useState('');
+      const [address, setAddress] = useState('');
+      const [privateKey, setPrivateKey] = useState('');
+      const [balance, setBalance] = useState(null);
+      const [recipient, setRecipient] = useState('');
+      const [amount, setAmount] = useState('');
+      const [txStatus, setTxStatus] = useState('');
+
+      // Generate a new wallet
+      const generateWallet = () => {
+        const network = bitcoin.networks.bitcoin;
+        const keyPair = bitcoin.ECPair.makeRandom({ network });
+        const { address: newAddress } = bitcoin.payments.p2wpkh({ pubkey: keyPair.publicKey, network });
+        const wif = keyPair.toWIF();
+        const mnemonic = generateMnemonic(); // Simplified mnemonic generation
+        setSeedPhrase(mnemonic);
+        setAddress(newAddress);
+        setPrivateKey(wif);
+        setTxStatus('Wallet generated! Save your seed phrase securely.');
+        checkBalance(newAddress);
+      };
+
+      // Simplified mnemonic generation (in production, use a library like bip39)
+      const generateMnemonic = () => {
+        const words = ['word1', 'word2', 'word3', 'word4', 'word5', 'word6', 'word7', 'word8', 'word9', 'word10', 'word11', 'word12'];
+        return words.join(' ');
+      };
+
+      // Check balance using a public API (Blockstream)
+      const checkBalance = async (address) => {
+        try {
+          const response = await axios.get(`https://blockstream.info/api/address/${address}`);
+          const balanceSat = response.data.chain_stats.funded_txo_sum - response.data.chain_stats.spent_txo_sum;
+          setBalance(balanceSat / 100000000); // Convert satoshis to BTC
+        } catch (error) {
+          setTxStatus('Error fetching balance: ' + error.message);
+        }
+      };
+
+      // Send Bitcoin transaction
+      const sendBitcoin = async () => {
+        if (!recipient || !amount) {
+          setTxStatus('Please enter a recipient address and amount.');
+          return;
+        }
+        try {
+          const network = bitcoin.networks.bitcoin;
+          const keyPair = bitcoin.ECPair.fromWIF(privateKey, network);
+          const psbt = new bitcoin.Psbt({ network });
+
+          // Fetch UTXOs for the address
+          const utxosResponse = await axios.get(`https://blockstream.info/api/address/${address}/utxo`);
+          const utxos = utxosResponse.data;
+
+          if (!utxos.length) {
+            setTxStatus('No UTXOs available to spend.');
+            return;
+          }
+
+          // Add inputs
+          utxos.forEach(utxo => {
+            psbt.addInput({
+              hash: utxo.txid,
+              index: utxo.vout,
+              witnessUtxo: { script: bitcoin.address.toOutputScript(address, network), value: utxo.value },
+            });
+          });
+
+          // Add output
+          const amountSat = Math.floor(parseFloat(amount) * 100000000);
+          psbt.addOutput({ address: recipient, value: amountSat });
+
+          // Add change output (simplified, assumes enough funds)
+          const fee = 10000; // Simplified fee (in satoshis)
+          const change = utxos.reduce((sum, utxo) => sum + utxo.value, 0) - amountSat - fee;
+          if (change > 0) {
+            psbt.addOutput({ address, value: change });
+          }
+
+          // Sign and finalize transaction
+          psbt.signAllInputs(keyPair);
+          psbt.finalizeAllInputs();
+          const txHex = psbt.extractTransaction().toHex();
+
+          // Broadcast transaction
+          const broadcastResponse = await axios.post('https://blockstream.info/api/tx', txHex);
+          setTxStatus(`Transaction sent! TxID: ${broadcastResponse.data}`);
+          setRecipient('');
+          setAmount('');
+          checkBalance(address);
+        } catch (error) {
+          setTxStatus('Error sending transaction: ' + error.message);
+        }
+      };
+
+      return (
+        <div className="container mx-auto p-4 max-w-lg">
+          <h1 className="text-2xl font-bold mb-4">Self-Custodial Bitcoin Wallet</h1>
+
+          <div className="mb-4">
+            <button
+              className="bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600"
+              onClick={generateWallet}
+            >
+              Generate New Wallet
+            </button>
+          </div>
+
+          {seedPhrase && (
+            <div className="mb-4 p-4 bg-yellow-100 border border-yellow-400 rounded">
+              <p className="font-bold text-red-600">⚠️ Save Your Seed Phrase!</p>
+              <p className="break-words">{seedPhrase}</p>
+              <p className="text-sm text-gray-600">
+                Write this down on paper or engrave on metal. Never store digitally or share it.
+              </p>
+            </div>
+          )}
+
+          {address && (
+            <div className="mb-4">
+              <p><strong>Address:</strong> {address}</p>
+              <p><strong>Balance:</strong> {balance !== null ? `${balance} BTC` : 'Loading...'}</p>
+              <p><strong>Private Key (WIF):</strong> {privateKey}</p>
+            </div>
+          )}
+
+          <div className="mb-4">
+            <h2 className="text-xl font-semibold mb-2">Send Bitcoin</h2>
+            <input
+              type="text"
+              placeholder="Recipient Address"
+              value={recipient}
+              onChange={(e) => setRecipient(e.target.value)}
+              className="w-full p-2 mb-2 border rounded"
+            />
+            <input
+              type="number"
+              placeholder="Amount (BTC)"
+              value={amount}
+              onChange={(e) => setAmount(e.target.value)}
+              className="w-full p-2 mb-2 border rounded"
+              step="0.00000001"
+            />
+            <button
+              className="bg-green-500 text-white px-4 py-2 rounded hover:bg-green-600"
+              onClick={sendBitcoin}
+            >
+              Send
+            </button>
+          </div>
+
+          {txStatus && (
+            <div className="p-4 bg-gray-100 border rounded">
+              <p>{txStatus}</p>
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    const root = ReactDOM.createRoot(document.getElementById('root'));
+    root.render(<BitcoinWallet />);
+  </script>
+</body>
+</html>
